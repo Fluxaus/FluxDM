@@ -1,2 +1,22 @@
 docs/
 .github/
+.clinerules
+
+# rust artifacts
+/target/
+**/target/
+Cargo.lock
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Debug files
+*.pdb
+
+# Misc
+.DS_Store
+Thumbs.db
