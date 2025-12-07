@@ -1,0 +1,55 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/engine",
+    "crates/storage",
+    "crates/api",
+    "crates/ui",
+    "crates/platform",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+authors = ["FluxDM Developer"]
+
+[workspace.dependencies]
+# Core async runtime
+tokio = { version = "1", features = ["full"] }
+
+# HTTP client
+reqwest = { version = "0.11", features = ["stream", "json"] }
+
+# Database
+sqlx = { version = "0.7", features = ["runtime-tokio", "sqlite"] }
+
+# Web server
+axum = "0.7"
+
+# UI framework
+slint = "1.8"
+
+# Error handling
+thiserror = "1.0"
+anyhow = "1.0"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Cross-platform utilities
+dirs = "5.0"
+rfd = "0.12"
+tray-icon = "0.12"
+
+# High-impact DX crates
+tower = { version = "0.4", features = ["limit", "timeout", "retry"] }
+dashmap = "5.5"
+cached = "0.46"
+governor = "0.6"
+indicatif = "0.17"
