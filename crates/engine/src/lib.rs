@@ -135,24 +135,58 @@ mod tests {
     fn test_download_creation() {
         // Test creating a new download with a URL
         let url = "https://example.com/file.zip";
-        let download = Download::new(url.to_string());
-        
+        let id = DownloadId::new(1);
+        let download = Download::new(id, url.to_string());
+
+        assert_eq!(download.id(), id);
         assert_eq!(download.url(), url);
+        assert_eq!(download.file_path(), None);
     }
 
     #[test]
     fn test_download_initial_status() {
         // New downloads should start in Pending status
-        let download = Download::new("https://example.com/file.zip".to_string());
+        let id = DownloadId::new(2);
+        let download = Download::new(id, "https://example.com/file.zip".to_string());
         assert_eq!(download.status(), DownloadStatus::Pending);
     }
 
     #[test]
     fn test_download_progress() {
         // New downloads should have zero progress
-        let download = Download::new("https://example.com/file.zip".to_string());
+        let id = DownloadId::new(3);
+        let download = Download::new(id, "https://example.com/file.zip".to_string());
         assert_eq!(download.bytes_downloaded(), 0);
         assert_eq!(download.total_bytes(), None); // Unknown until we start
         assert_eq!(download.progress_percent(), 0.0);
     }
+
+    #[test]
+    fn test_download_file_path() {
+        // Test setting and getting file path
+        let id = DownloadId::new(4);
+        let mut download = Download::new(id, "https://example.com/file.zip".to_string());
+
+        assert_eq!(download.file_path(), None);
+
+        let path = PathBuf::from("/downloads/file.zip");
+        download.set_file_path(path.clone());
+
+        assert_eq!(download.file_path(), Some(&path));
+    }
+
+    #[test]
+    fn test_download_timestamps() {
+        // Test that created_at is set on creation
+        let id = DownloadId::new(5);
+        let download = Download::new(id, "https://example.com/file.zip".to_string());
+
+        // created_at should be recent (within last second)
+        let now = SystemTime::now();
+        let created = download.created_at();
+        assert!(now.duration_since(created).unwrap().as_secs() < 1);
+
+        // started_at and completed_at should be None for new download
+        assert_eq!(download.started_at(), None);
+        assert_eq!(download.completed_at(), None);
 }
