@@ -44,8 +44,8 @@ impl HttpDownloader {
             return Err(DownloadError::HttpError(response.status().as_u16()));
         }
 
-        // get content length if available
-        let total_size = response.content_length();
+        // get content length if available (for future progress tracking)
+        let _total_size = response.content_length();
 
         // create the output file
         let mut file = File::create(path)
@@ -130,9 +130,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_downloader_creation() {
-        let downloader = HttpDownloader::new();
+        let _downloader = HttpDownloader::new();
         // just verify it doesn't panic
-        assert!(true);
 
     }
 
