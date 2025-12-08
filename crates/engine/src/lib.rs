@@ -1,6 +1,10 @@
 use std::path::PathBuf;
 use std::time::SystemTime;
 
+mod http;
+
+pub use http::{DownloadError, HttpDownloader};
+
 /// Unique identifier for a download
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct DownloadId(u64);
