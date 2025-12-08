@@ -1,0 +1,18 @@
+[package]
+name = "engine"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# async runtime
+tokio = { workspace = true }
+
+# HTTP client
+reqwest = { workspace = true }
+
+# async utilities
+futures-util = "0.3"
+
+[dev-dependencies]
+# for async tests
+tokio = { workspace = true, features = ["test-util"] }
