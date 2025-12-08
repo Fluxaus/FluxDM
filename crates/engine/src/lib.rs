@@ -125,6 +125,43 @@ impl Download {
     pub fn error_message(&self) -> Option<&str> {
         self.error_message.as_deref()
     }
+
+    /// Marks the download as started
+    pub fn start(&mut self) {
+        self.status = DownloadStatus::Downloading;
+        self.started_at = Some(SystemTime::now());
+    }
+
+    /// Pauses the download
+    pub fn pause(&mut self) {
+        self.status = DownloadStatus::Paused;
+    }
+
+    /// Resumes a paused download
+    pub fn resume(&mut self) {
+        self.status = DownloadStatus::Downloading;
+    }
+
+    /// Marks the download as completed
+    pub fn complete(&mut self) {
+        self.status = DownloadStatus::Completed;
+        self.completed_at = Some(SystemTime::now());
+    }
+
+    /// Marks the download as failed with an error message
+    pub fn fail(&mut self, error: String) {
+        self.status = DownloadStatus::Failed;
+        self.error_message = Some(error);
+        self.completed_at = Some(SystemTime::now());
+    }
+
+    /// Updates the download progress
+    pub fn update_progress(&mut self, bytes_downloaded: u64, total_bytes: Option<u64>) {
+        self.bytes_downloaded = bytes_downloaded;
+        if let Some(total) = total_bytes {
+            self.total_bytes = Some(total);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -189,4 +226,76 @@ mod tests {
         // started_at and completed_at should be None for new download
         assert_eq!(download.started_at(), None);
         assert_eq!(download.completed_at(), None);
+    }
+
+    #[test]
+    fn test_download_start() {
+        // Test starting a download
+        let id = DownloadId::new(6);
+        let mut download = Download::new(id, "https://example.com/file.zip".to_string());
+
+        assert_eq!(download.status(), DownloadStatus::Pending);
+        assert_eq!(download.started_at(), None);
+
+        download.start();
+
+        assert_eq!(download.status(), DownloadStatus::Downloading);
+        assert!(download.started_at().is_some());
+    }
+
+    #[test]
+    fn test_download_pause_resume() {
+        // Test pausing and resuming a download
+        let id = DownloadId::new(7);
+        let mut download = Download::new(id, "https://example.com/file.zip".to_string());
+
+        download.start();
+        assert_eq!(download.status(), DownloadStatus::Downloading);
+
+        download.pause();
+        assert_eq!(download.status(), DownloadStatus::Paused);
+
+        download.resume();
+        assert_eq!(download.status(), DownloadStatus::Downloading);
+    }
+
+    #[test]
+    fn test_download_complete() {
+        // Test completing a download
+        let id = DownloadId::new(8);
+        let mut download = Download::new(id, "https://example.com/file.zip".to_string());
+
+        download.start();
+        download.complete();
+
+        assert_eq!(download.status(), DownloadStatus::Completed);
+        assert!(download.completed_at().is_some());
+    }
+
+    #[test]
+    fn test_download_fail() {
+        // Test failing a download with error message
+        let id = DownloadId::new(9);
+        let mut download = Download::new(id, "https://example.com/file.zip".to_string());
+
+        download.start();
+        download.fail("Network connection lost".to_string());
+
+        assert_eq!(download.status(), DownloadStatus::Failed);
+        assert_eq!(download.error_message(), Some("Network connection lost"));
+        assert!(download.completed_at().is_some());
+    }
+
+    #[test]
+    fn test_download_progress_update() {
+        // Test updating progress
+        let id = DownloadId::new(10);
+        let mut download = Download::new(id, "https://example.com/file.zip".to_string());
+
+        download.update_progress(500, Some(1000));
+
+        assert_eq!(download.bytes_downloaded(), 500);
+        assert_eq!(download.total_bytes(), Some(1000));
+        assert_eq!(download.progress_percent(), 50.0);
+    }
 }
