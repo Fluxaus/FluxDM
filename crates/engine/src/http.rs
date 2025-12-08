@@ -17,23 +17,24 @@ impl HttpDownloader {
             .user_agent("FluxDM/0.1.0")
             .build()
             .expect("failed to create HTTP client"); // temporary, will improve error handling
-        
+
         Self { client }
     }
 
     /// Downloads a file from URL to the specified path
-    /// 
+    ///
     /// # Arguments
-    /// 
+    ///
     /// * `url` - The URL to download from
     /// * `path` - Destination file path
-    /// 
+    ///
     /// # Returns
-    /// 
+    ///
     /// Returns the total number of bytes downloaded
     pub async fn download(&self, url: &str, path: &Path) -> Result<u64, DownloadError> {
         // make the HTTP request
-        let response = self.client
+        let response = self
+            .client
             .get(url)
             .send()
             .await
@@ -60,11 +61,11 @@ impl HttpDownloader {
 
         while let Some(chunk) = stream.next().await {
             let chunk = chunk.map_err(|e| DownloadError::NetworkError(e.to_string()))?;
-            
+
             file.write_all(&chunk)
                 .await
                 .map_err(|e| DownloadError::FileError(e.to_string()))?;
-            
+
             bytes_downloaded += chunk.len() as u64;
         }
 
@@ -78,7 +79,8 @@ impl HttpDownloader {
 
     /// Gets the content length of a URL without downloading
     pub async fn get_content_length(&self, url: &str) -> Result<Option<u64>, DownloadError> {
-        let response = self.client
+        let response = self
+            .client
             .head(url)
             .send()
             .await
@@ -132,7 +134,6 @@ mod tests {
     async fn test_downloader_creation() {
         let _downloader = HttpDownloader::new();
         // just verify it doesn't panic
-
     }
 
     // note: actual download tests require network access
