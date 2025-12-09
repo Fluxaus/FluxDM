@@ -219,7 +219,7 @@ impl ChunkedDownloader {
         let chunks = self.calculate_chunks(file_size);
 
         // create output file with correct size (pre-allocate)
-        let mut file = File::create(path)
+        let file = File::create(path)
             .await
             .map_err(|e| DownloadError::FileError(e.to_string()))?;
         
