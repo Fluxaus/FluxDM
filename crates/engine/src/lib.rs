@@ -2,8 +2,10 @@ use std::path::PathBuf;
 use std::time::SystemTime;
 
 mod http;
+mod chunked;
 
 pub use http::{DownloadError, HttpDownloader};
+pub use chunked::{Chunk, ChunkConfig, ChunkedDownloader};
 
 /// Unique identifier for a download
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
