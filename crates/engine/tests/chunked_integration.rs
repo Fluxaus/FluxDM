@@ -82,3 +82,45 @@ async fn test_chunk_calculation_integration() {
     let total_size: u64 = chunks.iter().map(|c| c.size()).sum();
     assert_eq!(total_size, file_size);
 }
+
+#[tokio::test]
+#[ignore] // network test, run manually
+async fn test_resumable_download() {
+    use tokio::io::AsyncWriteExt;
+    
+    let downloader = ChunkedDownloader::new();
+    let url = "https://httpbin.org/bytes/10240";
+    let temp_dir = std::env::temp_dir();
+    let file_path = temp_dir.join("test_resume.bin");
+    
+    // clean up any existing file
+    let _ = fs::remove_file(&file_path).await;
+    
+    // create partial file (5KB of 10KB)
+    let mut file = fs::File::create(&file_path).await.unwrap();
+    let partial_data = vec![0u8; 5120];
+    file.write_all(&partial_data).await.unwrap();
+    file.flush().await.unwrap();
+    drop(file);
+    
+    // resume download
+    let result = downloader.download_resumable(url, &file_path).await;
+    assert!(result.is_ok(), "Resume failed: {:?}", result.err());
+    
+    // should download remaining ~5KB
+    let bytes_downloaded = result.unwrap();
+    assert!(bytes_downloaded > 0, "Should have downloaded remaining bytes");
+    assert!(bytes_downloaded <= 5120, "Should not re-download already existing bytes");
+    
+    // verify final file size
+    let metadata = fs::metadata(&file_path).await.expect("File not found");
+    assert_eq!(metadata.len(), 10240, "Final file should be 10KB");
+    
+    // test resuming already-complete file
+    let result2 = downloader.download_resumable(url, &file_path).await;
+    assert!(result2.is_ok());
+    assert_eq!(result2.unwrap(), 0, "Should not download anything for complete file");
+    
+    // cleanup
+    fs::remove_file(&file_path).await.expect("Failed to cleanup");
+}
