@@ -1,7 +1,6 @@
 //! Integration tests for chunked downloads
 
 use engine::ChunkedDownloader;
-use std::path::PathBuf;
 use tokio::fs;
 
 #[tokio::test]

@@ -25,7 +25,7 @@ impl Default for ChunkConfig {
 }
 
 /// Represents a single chunk of a file to download
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Chunk {
     /// Chunk index (0-based)
     pub index: u8,
@@ -33,12 +33,29 @@ pub struct Chunk {
     pub start: u64,
     /// Ending byte position (inclusive)
     pub end: u64,
+    /// Bytes already downloaded for this chunk
+    pub downloaded: u64,
 }
 
 impl Chunk {
     /// Returns the size of this chunk in bytes
     pub fn size(&self) -> u64 {
         self.end - self.start + 1
+    }
+
+    /// Returns the number of bytes remaining to download
+    pub fn remaining(&self) -> u64 {
+        self.size() - self.downloaded
+    }
+
+    /// Returns true if this chunk is complete
+    pub fn is_complete(&self) -> bool {
+        self.downloaded >= self.size()
+    }
+
+    /// Returns the next byte position to download from
+    pub fn resume_position(&self) -> u64 {
+        self.start + self.downloaded
     }
 }
 
@@ -127,6 +144,7 @@ impl ChunkedDownloader {
                 index: 0,
                 start: 0,
                 end: file_size - 1,
+                downloaded: 0,
             }];
         }
 
@@ -147,6 +165,7 @@ impl ChunkedDownloader {
                 index: i,
                 start,
                 end,
+                downloaded: 0,
             });
 
             start = end + 1;
