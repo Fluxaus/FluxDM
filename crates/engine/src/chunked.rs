@@ -174,15 +174,72 @@ impl ChunkedDownloader {
         chunks
     }
 
+    /// Detects if a partial file exists and updates chunks with already-downloaded bytes
+    pub async fn detect_resume(
+        &self,
+        path: &Path,
+        file_size: u64,
+    ) -> Result<Vec<Chunk>, DownloadError> {
+        // calculate chunks as if starting fresh
+        let mut chunks = self.calculate_chunks(file_size);
+
+        // check if file exists
+        let metadata = match tokio::fs::metadata(path).await {
+            Ok(m) => m,
+            Err(_) => return Ok(chunks), // no file exists, start fresh
+        };
+
+        let existing_size = metadata.len();
+
+        // if file is already the correct size, all chunks are done
+        if existing_size >= file_size {
+            for chunk in &mut chunks {
+                chunk.downloaded = chunk.size();
+            }
+            return Ok(chunks);
+        }
+
+        // update chunks based on existing file size
+        // we assume sequential writing from the start (simple case)
+        let mut remaining = existing_size;
+        
+        for chunk in &mut chunks {
+            let chunk_size = chunk.size();
+            
+            if remaining >= chunk_size {
+                // entire chunk is downloaded
+                chunk.downloaded = chunk_size;
+                remaining -= chunk_size;
+            } else if remaining > 0 {
+                // partial chunk downloaded
+                chunk.downloaded = remaining;
+                remaining = 0;
+            } else {
+                // no data for this chunk yet
+                break;
+            }
+        }
+
+        Ok(chunks)
+    }
+
     /// Downloads a single chunk and writes it to the file at the correct position
+    /// Supports resuming from chunk.downloaded bytes
     async fn download_chunk(
         &self,
         url: &str,
         chunk: Chunk,
         file: &mut File,
     ) -> Result<u64, DownloadError> {
-        // build Range header: "bytes=start-end"
-        let range_header = format!("bytes={}-{}", chunk.start, chunk.end);
+        // skip if chunk is already complete
+        if chunk.is_complete() {
+            return Ok(0);
+        }
+
+        // calculate range to download (resume from where we left off)
+        let start_byte = chunk.resume_position();
+        let end_byte = chunk.end;
+        let range_header = format!("bytes={}-{}", start_byte, end_byte);
 
         let response = self.client
             .get(url)
@@ -196,8 +253,8 @@ impl ChunkedDownloader {
             return Err(DownloadError::HttpError(response.status().as_u16()));
         }
 
-        // seek to correct position in file
-        file.seek(std::io::SeekFrom::Start(chunk.start))
+        // seek to resume position in file
+        file.seek(std::io::SeekFrom::Start(start_byte))
             .await
             .map_err(|e| DownloadError::FileError(e.to_string()))?;
 
@@ -250,6 +307,100 @@ impl ChunkedDownloader {
         let mut tasks = Vec::new();
         
         for chunk in chunks {
+            let url = url.to_string();
+            let path = path.to_path_buf();
+            let client = self.client.clone();
+            let config = self.config.clone();
+
+            let task = tokio::spawn(async move {
+                let downloader = Self {
+                    client,
+                    config,
+                };
+                
+                let mut file = File::options()
+                    .write(true)
+                    .open(&path)
+                    .await
+                    .map_err(|e| DownloadError::FileError(e.to_string()))?;
+
+                downloader.download_chunk(&url, chunk, &mut file).await
+            });
+
+            tasks.push(task);
+        }
+
+        // wait for all chunks to complete
+        let mut total_bytes = 0u64;
+        
+        for task in tasks {
+            let bytes = task
+                .await
+                .map_err(|e| DownloadError::NetworkError(format!("Task failed: {}", e)))?
+                ?;
+            
+            total_bytes += bytes;
+        }
+
+        Ok(total_bytes)
+    }
+
+    /// Downloads a file with resume support (detects partial files)
+    pub async fn download_resumable(
+        &self,
+        url: &str,
+        path: &Path,
+    ) -> Result<u64, DownloadError> {
+        // get file info
+        let (file_size, supports_ranges) = self.get_file_info(url).await?;
+
+        // if ranges not supported, fall back to single download
+        if !supports_ranges {
+            return self.download_single(url, path).await;
+        }
+
+        // detect existing partial file and get chunks with resume info
+        let chunks = self.detect_resume(path, file_size).await?;
+
+        // check if download is already complete
+        let total_remaining: u64 = chunks.iter().map(|c| c.remaining()).sum();
+        if total_remaining == 0 {
+            return Ok(0); // already complete
+        }
+
+        // ensure file exists with correct size
+        let file = if tokio::fs::metadata(path).await.is_ok() {
+            // file exists, open for writing
+            File::options()
+                .write(true)
+                .open(path)
+                .await
+                .map_err(|e| DownloadError::FileError(e.to_string()))?
+        } else {
+            // create new file with correct size
+            let file = File::create(path)
+                .await
+                .map_err(|e| DownloadError::FileError(e.to_string()))?;
+            
+            file.set_len(file_size)
+                .await
+                .map_err(|e| DownloadError::FileError(e.to_string()))?;
+            
+            file
+        };
+
+        // close the file handle, we'll reopen in each task
+        drop(file);
+
+        // download chunks in parallel (only incomplete ones)
+        let mut tasks = Vec::new();
+        
+        for chunk in chunks {
+            // skip complete chunks
+            if chunk.is_complete() {
+                continue;
+            }
+
             let url = url.to_string();
             let path = path.to_path_buf();
             let client = self.client.clone();
@@ -381,7 +532,118 @@ mod tests {
             index: 0,
             start: 100,
             end: 199,
+            downloaded: 0,
         };
         assert_eq!(chunk.size(), 100);
+    }
+
+    #[test]
+    fn test_chunk_resume_tracking() {
+        let mut chunk = Chunk {
+            index: 0,
+            start: 0,
+            end: 999,
+            downloaded: 500,
+        };
+        
+        assert_eq!(chunk.size(), 1000);
+        assert_eq!(chunk.remaining(), 500);
+        assert_eq!(chunk.resume_position(), 500);
+        assert!(!chunk.is_complete());
+        
+        // simulate completing the chunk
+        chunk.downloaded = 1000;
+        assert_eq!(chunk.remaining(), 0);
+        assert!(chunk.is_complete());
+    }
+
+    #[tokio::test]
+    async fn test_resume_detection_no_file() {
+        let downloader = ChunkedDownloader::new();
+        let path = std::path::PathBuf::from("/nonexistent/file.bin");
+        
+        let chunks = downloader.detect_resume(&path, 8_000_000).await.unwrap();
+        
+        // should return fresh chunks (all with downloaded=0)
+        assert_eq!(chunks.len(), 8);
+        for chunk in chunks {
+            assert_eq!(chunk.downloaded, 0);
+            assert!(!chunk.is_complete());
+        }
+    }
+
+    #[tokio::test]
+    async fn test_resume_detection_partial_file() {
+        use tokio::io::AsyncWriteExt;
+        
+        let downloader = ChunkedDownloader::new();
+        let temp_dir = std::env::temp_dir();
+        let file_path = temp_dir.join("test_resume_partial.bin");
+        
+        // clean up any existing file
+        let _ = tokio::fs::remove_file(&file_path).await;
+        
+        // create partial file (2.5MB of an 8MB file)
+        let partial_size = 2_621_440u64; // 2.5MB
+        let mut file = File::create(&file_path).await.unwrap();
+        let data = vec![0u8; partial_size as usize];
+        file.write_all(&data).await.unwrap();
+        file.flush().await.unwrap();
+        drop(file);
+        
+        // detect resume
+        let total_size = 8_388_608u64; // 8MB
+        let chunks = downloader.detect_resume(&file_path, total_size).await.unwrap();
+        
+        // verify chunks
+        assert_eq!(chunks.len(), 8);
+        
+        // each chunk is 1MB (1_048_576 bytes)
+        // partial_size is 2.5MB, so first 2 chunks complete, 3rd chunk half done
+        assert_eq!(chunks[0].downloaded, 1_048_576); // complete
+        assert_eq!(chunks[1].downloaded, 1_048_576); // complete
+        assert_eq!(chunks[2].downloaded, 524_288);   // 0.5MB done
+        assert_eq!(chunks[3].downloaded, 0);         // not started
+        
+        assert!(chunks[0].is_complete());
+        assert!(chunks[1].is_complete());
+        assert!(!chunks[2].is_complete());
+        assert!(!chunks[3].is_complete());
+        
+        // cleanup
+        let _ = tokio::fs::remove_file(&file_path).await;
+    }
+
+    #[tokio::test]
+    async fn test_resume_detection_complete_file() {
+        use tokio::io::AsyncWriteExt;
+        
+        let downloader = ChunkedDownloader::new();
+        let temp_dir = std::env::temp_dir();
+        let file_path = temp_dir.join("test_resume_complete.bin");
+        
+        // clean up any existing file
+        let _ = tokio::fs::remove_file(&file_path).await;
+        
+        // create complete file (8MB)
+        let file_size = 8_388_608u64;
+        let mut file = File::create(&file_path).await.unwrap();
+        let data = vec![0u8; file_size as usize];
+        file.write_all(&data).await.unwrap();
+        file.flush().await.unwrap();
+        drop(file);
+        
+        // detect resume
+        let chunks = downloader.detect_resume(&file_path, file_size).await.unwrap();
+        
+        // all chunks should be complete
+        assert_eq!(chunks.len(), 8);
+        for chunk in chunks {
+            assert!(chunk.is_complete());
+            assert_eq!(chunk.remaining(), 0);
+        }
+        
+        // cleanup
+        let _ = tokio::fs::remove_file(&file_path).await;
     }
 }
