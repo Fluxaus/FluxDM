@@ -3,8 +3,10 @@
 use crate::DownloadError;
 use reqwest::Client;
 use std::path::Path;
+use std::time::Duration;
 use tokio::fs::File;
 use tokio::io::{AsyncSeekExt, AsyncWriteExt};
+use tokio::time::sleep;
 
 /// Configuration for chunked downloads
 #[derive(Debug, Clone)]
@@ -13,13 +15,22 @@ pub struct ChunkConfig {
     pub chunk_count: u8,
     /// Minimum size in bytes for a chunk (don't split if file is smaller)
     pub min_chunk_size: u64,
+    /// Maximum number of retry attempts per chunk
+    pub max_retries: u32,
+    /// Initial retry delay in milliseconds
+    pub retry_delay_ms: u64,
+    /// Whether to use exponential backoff (doubles delay each retry)
+    pub exponential_backoff: bool,
 }
 
 impl Default for ChunkConfig {
     fn default() -> Self {
         Self {
-            chunk_count: 8,        // 8 parallel connections (like IDM)
-            min_chunk_size: 1_048_576, // 1MB minimum per chunk
+            chunk_count: 8,               // 8 parallel connections (like IDM)
+            min_chunk_size: 1_048_576,    // 1MB minimum per chunk
+            max_retries: 3,               // retry up to 3 times
+            retry_delay_ms: 1000,         // start with 1 second delay
+            exponential_backoff: true,    // 1s, 2s, 4s, 8s...
         }
     }
 }
@@ -223,6 +234,47 @@ impl ChunkedDownloader {
         Ok(chunks)
     }
 
+    /// Downloads a single chunk with retry logic and exponential backoff
+    async fn download_chunk_with_retry(
+        &self,
+        url: &str,
+        chunk: Chunk,
+        file: &mut File,
+    ) -> Result<u64, DownloadError> {
+        let mut attempt = 0;
+        let mut last_error;
+
+        loop {
+            match self.download_chunk(url, chunk, file).await {
+                Ok(bytes) => return Ok(bytes),
+                Err(e) => {
+                    last_error = e;
+                    attempt += 1;
+
+                    // check if we've exhausted retries
+                    if attempt > self.config.max_retries {
+                        break;
+                    }
+
+                    // calculate backoff delay
+                    let delay = if self.config.exponential_backoff {
+                        // exponential: 1s, 2s, 4s, 8s...
+                        self.config.retry_delay_ms * 2u64.pow(attempt - 1)
+                    } else {
+                        // constant delay
+                        self.config.retry_delay_ms
+                    };
+
+                    // wait before retrying
+                    sleep(Duration::from_millis(delay)).await;
+                }
+            }
+        }
+
+        // return the last error after exhausting retries
+        Err(last_error)
+    }
+
     /// Downloads a single chunk and writes it to the file at the correct position
     /// Supports resuming from chunk.downloaded bytes
     async fn download_chunk(
@@ -303,7 +355,7 @@ impl ChunkedDownloader {
             .await
             .map_err(|e| DownloadError::FileError(e.to_string()))?;
 
-        // download chunks in parallel
+        // download chunks in parallel with retry logic
         let mut tasks = Vec::new();
         
         for chunk in chunks {
@@ -324,7 +376,7 @@ impl ChunkedDownloader {
                     .await
                     .map_err(|e| DownloadError::FileError(e.to_string()))?;
 
-                downloader.download_chunk(&url, chunk, &mut file).await
+                downloader.download_chunk_with_retry(&url, chunk, &mut file).await
             });
 
             tasks.push(task);
@@ -418,7 +470,7 @@ impl ChunkedDownloader {
                     .await
                     .map_err(|e| DownloadError::FileError(e.to_string()))?;
 
-                downloader.download_chunk(&url, chunk, &mut file).await
+                downloader.download_chunk_with_retry(&url, chunk, &mut file).await
             });
 
             tasks.push(task);
@@ -493,6 +545,9 @@ mod tests {
         let config = ChunkConfig {
             chunk_count: 4,
             min_chunk_size: 100,
+            max_retries: 3,
+            retry_delay_ms: 1000,
+            exponential_backoff: true,
         };
         let downloader = ChunkedDownloader::with_config(config);
 
@@ -516,6 +571,9 @@ mod tests {
         let config = ChunkConfig {
             chunk_count: 8,
             min_chunk_size: 1_000_000,
+            max_retries: 3,
+            retry_delay_ms: 1000,
+            exponential_backoff: true,
         };
         let downloader = ChunkedDownloader::with_config(config);
 
@@ -645,5 +703,51 @@ mod tests {
         
         // cleanup
         let _ = tokio::fs::remove_file(&file_path).await;
+    }
+
+    #[test]
+    fn test_retry_config() {
+        let config = ChunkConfig::default();
+        assert_eq!(config.max_retries, 3);
+        assert_eq!(config.retry_delay_ms, 1000);
+        assert!(config.exponential_backoff);
+    }
+
+    #[test]
+    fn test_custom_retry_config() {
+        let config = ChunkConfig {
+            chunk_count: 4,
+            min_chunk_size: 512_000,
+            max_retries: 5,
+            retry_delay_ms: 500,
+            exponential_backoff: false,
+        };
+
+        let downloader = ChunkedDownloader::with_config(config.clone());
+        assert_eq!(downloader.config.max_retries, 5);
+        assert_eq!(downloader.config.retry_delay_ms, 500);
+        assert!(!downloader.config.exponential_backoff);
+    }
+
+    #[test]
+    fn test_exponential_backoff_delays() {
+        // simulate exponential backoff calculation
+        let base_delay = 1000u64;
+        
+        // attempt 1: 1s (2^0 = 1)
+        let delay1 = base_delay * 2u64.pow(0);
+        assert_eq!(delay1, 1000);
+        
+        // attempt 2: 2s (2^1 = 2)
+        let delay2 = base_delay * 2u64.pow(1);
+        assert_eq!(delay2, 2000);
+        
+        // attempt 3: 4s (2^2 = 4)
+        let delay3 = base_delay * 2u64.pow(2);
+        assert_eq!(delay3, 4000);
+        
+        // attempt 4: 8s (2^3 = 8)
+        let delay4 = base_delay * 2u64.pow(3);
+        assert_eq!(delay4, 8000);
     }
 }
