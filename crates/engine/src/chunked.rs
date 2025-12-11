@@ -3,8 +3,10 @@
 use crate::DownloadError;
 use reqwest::Client;
 use std::path::Path;
+use std::time::Duration;
 use tokio::fs::File;
 use tokio::io::{AsyncSeekExt, AsyncWriteExt};
+use tokio::time::sleep;
 
 /// Configuration for chunked downloads
 #[derive(Debug, Clone)]
@@ -13,13 +15,22 @@ pub struct ChunkConfig {
     pub chunk_count: u8,
     /// Minimum size in bytes for a chunk (don't split if file is smaller)
     pub min_chunk_size: u64,
+    /// Maximum number of retry attempts per chunk
+    pub max_retries: u32,
+    /// Initial retry delay in milliseconds
+    pub retry_delay_ms: u64,
+    /// Whether to use exponential backoff (doubles delay each retry)
+    pub exponential_backoff: bool,
 }
 
 impl Default for ChunkConfig {
     fn default() -> Self {
         Self {
-            chunk_count: 8,        // 8 parallel connections (like IDM)
-            min_chunk_size: 1_048_576, // 1MB minimum per chunk
+            chunk_count: 8,               // 8 parallel connections (like IDM)
+            min_chunk_size: 1_048_576,    // 1MB minimum per chunk
+            max_retries: 3,               // retry up to 3 times
+            retry_delay_ms: 1000,         // start with 1 second delay
+            exponential_backoff: true,    // 1s, 2s, 4s, 8s...
         }
     }
 }
