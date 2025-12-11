@@ -242,13 +242,13 @@ impl ChunkedDownloader {
         file: &mut File,
     ) -> Result<u64, DownloadError> {
         let mut attempt = 0;
-        let mut last_error = None;
+        let mut last_error;
 
         loop {
             match self.download_chunk(url, chunk, file).await {
                 Ok(bytes) => return Ok(bytes),
                 Err(e) => {
-                    last_error = Some(e);
+                    last_error = e;
                     attempt += 1;
 
                     // check if we've exhausted retries
@@ -272,9 +272,7 @@ impl ChunkedDownloader {
         }
 
         // return the last error after exhausting retries
-        Err(last_error.unwrap_or_else(|| {
-            DownloadError::NetworkError("Unknown error during retry".to_string())
-        }))
+        Err(last_error)
     }
 
     /// Downloads a single chunk and writes it to the file at the correct position
@@ -547,6 +545,9 @@ mod tests {
         let config = ChunkConfig {
             chunk_count: 4,
             min_chunk_size: 100,
+            max_retries: 3,
+            retry_delay_ms: 1000,
+            exponential_backoff: true,
         };
         let downloader = ChunkedDownloader::with_config(config);
 
@@ -570,6 +571,9 @@ mod tests {
         let config = ChunkConfig {
             chunk_count: 8,
             min_chunk_size: 1_000_000,
+            max_retries: 3,
+            retry_delay_ms: 1000,
+            exponential_backoff: true,
         };
         let downloader = ChunkedDownloader::with_config(config);
 
