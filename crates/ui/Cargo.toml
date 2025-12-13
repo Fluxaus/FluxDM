@@ -1,6 +1,11 @@
 [package]
 name = "ui"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
 
 [dependencies]
+slint = { workspace = true }
+engine = { path = "../engine" }
+
+[build-dependencies]
+slint-build = "1.8"
